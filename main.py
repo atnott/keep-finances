@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # инициализации FastAPI приложения
 app = FastAPI()
@@ -9,10 +9,50 @@ app = FastAPI()
 BALANCE = {}
 
 class OperationRequest(BaseModel):
-    wallet_name: str
+    wallet_name: str = Field(..., max_length=127)
     amount: float
-    description: str | None = None
+    description: str | None = Field(None, max_length=255)
 
+    # валидатор для проверки, что сумма положительная
+    @field_validator('amount')
+    def amount_must_be_positive(cls, v: float) -> float:
+        # проверяем, что значение > 0
+        if v <= 0:
+            raise ValueError("Amount must be positive")
+        # возвращаем, если все хорошо
+        return v
+
+    @field_validator('wallet_name')
+    def wallet_name_not_empty(cls, v: str) -> str:
+        # убираем пробелы по краям
+        v = v.strip()
+        # строка не пустая
+        if len(v) == 0:
+            raise ValueError("Wallet name must not be empty")
+        # возвращаем очищенное значение
+        return v
+
+class CreateWalletRequest(BaseModel):
+    name: str = Field(..., max_length=127)
+    initial_balance: float = 0
+
+    @field_validator('initial_balance')
+    def balance_not_negative(cls, v: float) -> float:
+        # проверяем, что значение > 0
+        if v < 0:
+            raise ValueError("initial_balance cannot be negative")
+        # возвращаем, если все хорошо
+        return v
+
+    @field_validator('name')
+    def name_not_empty(cls, v: str) -> str:
+        # убираем пробелы по краям
+        v = v.strip()
+        # строка не пустая
+        if len(v) == 0:
+            raise ValueError("Wallet name must not be empty")
+        # возвращаем очищенное значение
+        return v
 
 @app.get('/balance')
 def get_balance(wallet_name: str | None = None):
@@ -28,21 +68,21 @@ def get_balance(wallet_name: str | None = None):
     # возвращаем баланс конкретного кошелька
     return {'wallet': wallet_name, 'balance': BALANCE[wallet_name]}
 
-@app.post('/wallets/{name}')
-def create_wallet(name: str, initial_balance: float = 0):
+@app.post('/wallets')
+def create_wallet(wallet: CreateWalletRequest):
     # проверяем не существует ли уже такой кошелек
-    if name in BALANCE:
+    if wallet.name in BALANCE:
         raise HTTPException(
             status_code=400,
-            detail=f"Wallet '{name}' already exists"
+            detail=f"Wallet '{wallet.name}' already exists"
         )
     # создаем новый кошелек с начальным балансом
-    BALANCE[name] = initial_balance
+    BALANCE[wallet.name] = wallet.initial_balance
     # возвращаем информацию о созданном кошельке
     return {
-        'message': f"Wallet '{name}' created",
-        'wallet': name,
-        'balance': initial_balance
+        'message': f"Wallet '{wallet.name}' created",
+        'wallet': wallet.name,
+        'balance': BALANCE[wallet.name]
     }
 
 @app.post('/operations/income')
@@ -52,12 +92,6 @@ def add_income(operation: OperationRequest):
         raise HTTPException(
             status_code=404,
             detail=f"Wallet '{operation.wallet_name}' not found"
-        )
-    # проверяем положительна ли сумма
-    if operation.amount <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail='Amount must be positive'
         )
     # добавляем доход к балансу кошелька
     BALANCE[operation.wallet_name] += operation.amount
@@ -77,12 +111,6 @@ def add_expense(operation: OperationRequest):
         raise HTTPException(
             status_code=404,
             detail=f"Wallet '{operation.wallet_name}' not found"
-        )
-    # положительна ли сумма
-    if operation.amount <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail='Amount must be positive'
         )
     # хватает ли денег
     if operation.amount > BALANCE[operation.wallet_name]:
